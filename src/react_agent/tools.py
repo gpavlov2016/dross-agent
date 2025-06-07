@@ -6,17 +6,14 @@ These tools are intended as free examples to get started. For production use,
 consider implementing more robust and specialized tools tailored to your needs.
 """
 
-from multiprocessing import connection
 from typing import Any, Callable, List, Optional, Dict, cast
 import pandas as pd
 import asyncio
-from react_agent.db import conn
-
+from react_agent.db import get_db_connection
+from langchain_core.runnables import RunnableConfig
 from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
 
 from react_agent.configuration import Configuration
-
-
 
 
 async def search(query: str) -> Optional[dict[str, Any]]:
@@ -30,6 +27,7 @@ async def search(query: str) -> Optional[dict[str, Any]]:
     wrapped = TavilySearch(max_results=configuration.max_search_results)
     return cast(dict[str, Any], await wrapped.ainvoke({"query": query}))
 
+
 # async def supabase_init() -> Client:
 #     """Initialize the Supabase client."""
 #     configuration = Configuration.from_context()
@@ -37,31 +35,51 @@ async def search(query: str) -> Optional[dict[str, Any]]:
 #         supabase_url=configuration.supabase_url,
 #         supabase_key=configuration.supabase_key
 #     )
-    
+
 #     return supabase
 
+seller_id_lt = {
+    "guy.pavlov84@gmail.com": "2",
+    "guy.pavlov84+1@gmail.com": "1",
+}
 
 
-async def list_tables_tool() -> List[str]:
+def get_seller_id(config: RunnableConfig) -> str:
+    # print("config: ", config)
+    langgraph_auth_user = (
+        config["configurable"].get("langgraph_auth_user")
+        if config and "configurable" in config
+        else None
+    )
+    print("langgraph_auth_user: ", langgraph_auth_user)
+
+    return seller_id_lt[langgraph_auth_user.email]
+
+
+async def list_tables_tool(config: RunnableConfig) -> List[str]:
     """Fetch the list of available tables from the database."""
+    seller_id = get_seller_id(config)
+    # conn = await get_db_connection(seller_id)
     return [
-        "orders",
+        f"orders_view_{seller_id}",
     ]
 
 
-async def get_schema_tool(table_name: str) -> str:
+async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
     """Fetch the schema for a specific table in Postgres.
 
     Args:
-        table_name (str): The name of the table to get the schema for. 
+        table_name (str): The name of the table to get the schema for.
 
     Returns:
         str: the schema for the table represented in the following format:
         Column: {row[0]}, Type: {row[1]}, Max Length: {row[2]}, Default: {row[3]}, Nullable: {row[4]}
         or an error message if the operation fails.
     """
-    # configuration = Configuration.from_context()
     try:
+        seller_id = get_seller_id(config)
+        conn = await get_db_connection(seller_id)
+
         def blocking_get_schema():
             cur = conn.cursor()
             cur.execute(f"""
@@ -71,12 +89,13 @@ async def get_schema_tool(table_name: str) -> str:
             """)
             schema_rows = cur.fetchall()
             return schema_rows
+
         return await asyncio.to_thread(blocking_get_schema)
     except Exception as e:
         return f"Error fetching schema for {table_name}: {str(e)}"
 
 
-async def db_query_tool(query: str) -> Dict[str, Any]:
+async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
     """Execute a SQL query and return the results or error message.
 
     Args:
@@ -90,6 +109,9 @@ async def db_query_tool(query: str) -> Dict[str, Any]:
     """
     # configuration = Configuration.from_context()
     try:
+        seller_id = get_seller_id(config)
+        conn = await get_db_connection(seller_id)
+
         def blocking_db_query():
             cur = conn.cursor()
             cur.execute(query)
@@ -98,18 +120,15 @@ async def db_query_tool(query: str) -> Dict[str, Any]:
             return {
                 "success": True,
                 "data": df,
-                "message": "Query executed successfully"
+                "message": "Query executed successfully",
             }
+
         return await asyncio.to_thread(blocking_db_query)
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Query execution failed"
-        }
+        return {"success": False, "error": str(e), "message": "Query execution failed"}
 
 
-async def db_write_tool(query: str) -> dict[str, Any]:
+async def db_write_tool(query: str, config: RunnableConfig) -> dict[str, Any]:
     """Execute a write SQL query (INSERT, UPDATE, DELETE) and return the result or error message.
 
     Args:
@@ -123,6 +142,9 @@ async def db_write_tool(query: str) -> dict[str, Any]:
             - 'error': Error message (if failed)
     """
     try:
+        seller_id = get_seller_id(config)
+        conn = await get_db_connection(seller_id)
+
         def blocking_db_write():
             cur = conn.cursor()
             cur.execute(query)
@@ -131,14 +153,15 @@ async def db_write_tool(query: str) -> dict[str, Any]:
             return {
                 "success": True,
                 "rows_affected": rows_affected,
-                "message": "Write query executed successfully"
+                "message": "Write query executed successfully",
             }
+
         return await asyncio.to_thread(blocking_db_write)
     except Exception as e:
         return {
             "success": False,
             "error": str(e),
-            "message": "Write query execution failed"
+            "message": "Write query execution failed",
         }
 
 
@@ -146,5 +169,4 @@ TOOLS: List[Callable[..., Any]] = [
     list_tables_tool,
     get_schema_tool,
     db_query_tool,
-    db_write_tool
 ]

@@ -3,5 +3,8 @@
   "graphs": {
     "dross-agent": "./src/react_agent/graph.py:graph"
   },
+  "auth": {
+    "path": "src/security/auth.py:auth"
+  },
   "env": ".env"
 }

@@ -37,9 +37,17 @@ def get_seller_id(config: RunnableConfig) -> str:
         if config and "configurable" in config
         else None
     )
-    print("langgraph_auth_user: ", langgraph_auth_user)
+    print("get_seller_id: langgraph_auth_user: ", langgraph_auth_user)
+    
+    # Handle both dot notation and dict access for email
+    email = getattr(langgraph_auth_user, 'email', None) or langgraph_auth_user.get('email')
+    if not email:
+        raise ValueError("No email found in langgraph_auth_user")
+        
+    if email not in _sellers:
+        raise ValueError(f"No seller found for email: {email}")
 
-    return _sellers[langgraph_auth_user.email]
+    return _sellers[email]
 
 
 async def list_tables_tool(config: RunnableConfig) -> List[str]:

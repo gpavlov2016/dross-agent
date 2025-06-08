@@ -101,21 +101,24 @@ async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
             - 'data': DataFrame with results (if successful)
             - 'error': Error message (if failed)
     """
-    # configuration = Configuration.from_context()
     try:
         seller_id = get_seller_id(config)
         conn = await get_db_connection(seller_id)
 
         def blocking_db_query():
             cur = conn.cursor()
-            cur.execute(query)
-            results = cur.fetchall()
-            df = pd.DataFrame(results)
-            return {
-                "success": True,
-                "data": df,
-                "message": "Query executed successfully",
-            }
+            try:
+                cur.execute(query)
+                results = cur.fetchall()
+                df = pd.DataFrame(results)
+                return {
+                    "success": True,
+                    "data": df,
+                    "message": "Query executed successfully",
+                }
+            except Exception as e:
+                conn.rollback()
+                raise e
 
         return await asyncio.to_thread(blocking_db_query)
     except Exception as e:
@@ -141,14 +144,18 @@ async def db_write_tool(query: str, config: RunnableConfig) -> dict[str, Any]:
 
         def blocking_db_write():
             cur = conn.cursor()
-            cur.execute(query)
-            rows_affected = cur.rowcount
-            conn.commit()
-            return {
-                "success": True,
-                "rows_affected": rows_affected,
-                "message": "Write query executed successfully",
-            }
+            try:
+                cur.execute(query)
+                rows_affected = cur.rowcount
+                conn.commit()
+                return {
+                    "success": True,
+                    "rows_affected": rows_affected,
+                    "message": "Write query executed successfully",
+                }
+            except Exception as e:
+                conn.rollback()
+                raise e
 
         return await asyncio.to_thread(blocking_db_write)
     except Exception as e:

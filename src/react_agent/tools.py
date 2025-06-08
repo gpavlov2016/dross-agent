@@ -9,7 +9,7 @@ consider implementing more robust and specialized tools tailored to your needs.
 from typing import Any, Callable, List, Optional, Dict, cast
 import pandas as pd
 import asyncio
-from react_agent.db import get_db_connection
+from react_agent.db import get_db_connection, _sellers
 from langchain_core.runnables import RunnableConfig
 from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
 
@@ -28,20 +28,6 @@ async def search(query: str) -> Optional[dict[str, Any]]:
     return cast(dict[str, Any], await wrapped.ainvoke({"query": query}))
 
 
-# async def supabase_init() -> Client:
-#     """Initialize the Supabase client."""
-#     configuration = Configuration.from_context()
-#     supabase = create_client(
-#         supabase_url=configuration.supabase_url,
-#         supabase_key=configuration.supabase_key
-#     )
-
-#     return supabase
-
-seller_id_lt = {
-    "guy.pavlov84@gmail.com": "2",
-    "guy.pavlov84+1@gmail.com": "1",
-}
 
 
 def get_seller_id(config: RunnableConfig) -> str:
@@ -53,7 +39,7 @@ def get_seller_id(config: RunnableConfig) -> str:
     )
     print("langgraph_auth_user: ", langgraph_auth_user)
 
-    return seller_id_lt[langgraph_auth_user.email]
+    return _sellers[langgraph_auth_user.email]
 
 
 async def list_tables_tool(config: RunnableConfig) -> List[str]:

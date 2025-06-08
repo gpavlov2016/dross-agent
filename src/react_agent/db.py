@@ -8,18 +8,12 @@ from typing import Dict
 
 load_dotenv()
 
-# Cache for database connections
+# Cache for database connections - maps seller_id to connection
 _connection_cache: Dict[str, pg_connection] = {}
+# Maps email to seller_id
+_sellers: Dict[str, str] = {}
 
-async def postgres_init() -> pg_connection:
-    # "postgresql://postgres:postgres@127.0.0.1:4322/postgres"
-    # conn = psycopg2.connect(
-    #     host='127.0.0.1',
-    #     database='postgres',
-    #     user='postgres',
-    #     password='postgres',
-    #     port=4322
-    # )
+async def sellers_init() -> None:
     conn = psycopg2.connect(
         host=os.getenv('DB_HOST'),
         database=os.getenv('DB_NAME'),
@@ -27,7 +21,14 @@ async def postgres_init() -> pg_connection:
         password=os.getenv('DB_PASSWORD'),
         port=os.getenv('DB_PORT')
     )
-    return conn
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM sellers")
+    sellers = cur.fetchall()
+    for seller in sellers:
+        _sellers[seller[0]] = seller[1]
+    print("Sellers: ", _sellers)
+    conn.close()
+    return
 
 async def get_db_connection(seller_id: str) -> pg_connection:
     """Get the database connection from cache or create a new one if not exists."""
@@ -63,5 +64,15 @@ async def get_db_connection(seller_id: str) -> pg_connection:
     _connection_cache[seller_id] = conn
     return conn
 
+# async def supabase_init() -> Client:
+#     """Initialize the Supabase client."""
+#     configuration = Configuration.from_context()
+#     supabase = create_client(
+#         supabase_url=configuration.supabase_url,
+#         supabase_key=configuration.supabase_key
+#     )
 
-# conn = asyncio.run(postgres_init())
+#     return supabase
+
+
+conn = asyncio.run(sellers_init())

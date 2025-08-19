@@ -34,18 +34,11 @@ async def call_model(state: State) -> Dict[str, List[AIMessage]]:
     Returns:
         dict: A dictionary containing the model's response message.
     """
-    
-    print('Configuration class:', Configuration)
-    print('Module:', Configuration.__module__)
-    print('Docstring:', Configuration.__doc__)
-    print('Fields:', [f.name for f in Configuration.__dataclass_fields__.values()])
-    
+        
     configuration = Configuration.from_context()
 
     # Initialize the model with tool binding. Change the model or add more tools here.
     model = load_chat_model(configuration.model).bind_tools(TOOLS)
-
-    print(configuration.system_prompt)
 
     # Format the system prompt. Customize this to change the agent's behavior.
     system_message = configuration.system_prompt.format(

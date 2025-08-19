@@ -75,4 +75,13 @@ async def get_db_connection(seller_id: str) -> pg_connection:
 #     return supabase
 
 
-conn = asyncio.run(sellers_init())
+# conn = asyncio.run(sellers_init())
+
+conn = psycopg2.connect(
+    host=os.getenv('DB_HOST'),
+    database=os.getenv('DB_NAME'),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    port=os.getenv('DB_PORT')
+)
+

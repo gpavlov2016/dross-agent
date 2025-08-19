@@ -12,9 +12,39 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
 
 @auth.authenticate
-async def get_current_user(authorization: str | None):
-    """Validate JWT tokens and extract user information."""
-    assert authorization
+async def get_current_user(authorization: str | None, headers: dict):
+    """Validate JWT tokens and extract user information, with caching for the life of the token."""
+    headers_str = {
+        key.decode("utf-8"): value.decode("utf-8") for key, value in headers.items()
+    }
+    x_api_key = headers_str.get("x-api-key")
+
+    # Validate LangSmith API key by checking with LangSmith API
+    if x_api_key:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.smith.langchain.com/api/v1/settings",
+                    headers={"x-api-key": x_api_key},
+                )
+                if response.status_code == 200:
+                    return {
+                        "identity": "langsmith-user",
+                        "email": "langsmith-user@example.com",
+                        "is_authenticated": True,
+                    }
+        except httpx.RequestError as e:
+            raise Auth.exceptions.HTTPException(
+                status_code=401, detail=f"Failed to validate LangSmith API key: {e}"
+            )
+
+
+    if not authorization:
+        raise Auth.exceptions.HTTPException(
+            status_code=401,
+            detail="No authorization header provided",
+        )
+
     scheme, token = authorization.split()
     assert scheme.lower() == "bearer"
 
@@ -151,6 +181,10 @@ async def on_assistants(
     #     'metadata': {},
     #     'name': 'Untitled'
     # }
+
+    if (ctx.user.identity == "langgraph-studio-user" or ctx.user.identity == "langsmith-user"):
+        return
+
     raise Auth.exceptions.HTTPException(
         status_code=403,
         detail="User lacks the required permissions.",

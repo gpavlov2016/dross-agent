@@ -14,7 +14,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
 
 from react_agent.configuration import Configuration
+from react_agent.db import conn
 
+pg_schema = "sp_api_thrive_2"
 
 async def search(query: str) -> Optional[dict[str, Any]]:
     """Search for general web results.
@@ -31,6 +33,7 @@ async def search(query: str) -> Optional[dict[str, Any]]:
 
 
 def get_seller_id(config: RunnableConfig) -> str:
+    return "admin"
     # print("config: ", config)
     langgraph_auth_user = (
         config["configurable"].get("langgraph_auth_user")
@@ -52,11 +55,30 @@ def get_seller_id(config: RunnableConfig) -> str:
 
 async def list_tables_tool(config: RunnableConfig) -> List[str]:
     """Fetch the list of available tables from the database."""
-    seller_id = get_seller_id(config)
-    # conn = await get_db_connection(seller_id)
-    return [
-        f"orders_view_{seller_id}",
-    ]
+    try:
+        # seller_id = get_seller_id(config) # TODO: uncomment this when we have a way to get the seller id
+        # conn = await get_db_connection(seller_id) # TODO: uncomment this when we have a way to get the seller id
+
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = '{pg_schema}' 
+            AND table_type = 'BASE TABLE'
+            ORDER BY table_name;
+        """)
+        result = await asyncio.to_thread(cur.fetchall)
+        # result contains tuples of (table_name, )
+        return [table[0] for table in result]
+
+    except Exception as e:
+        print(f"Error fetching tables: {str(e)}")
+        return []
+    # seller_id = get_seller_id(config)
+    # # conn = await get_db_connection(seller_id)
+    # return [
+    #     f"orders_view_{seller_id}",
+    # ]
 
 
 async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
@@ -71,20 +93,53 @@ async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
         or an error message if the operation fails.
     """
     try:
-        seller_id = get_seller_id(config)
-        conn = await get_db_connection(seller_id)
+        # seller_id = get_seller_id(config)
+        # conn = await get_db_connection(seller_id)
 
-        def blocking_get_schema():
-            cur = conn.cursor()
-            cur.execute(f"""
-                SELECT column_name, data_type, character_maximum_length, column_default, is_nullable
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE table_name = '{table_name}';
-            """)
-            schema_rows = cur.fetchall()
-            return schema_rows
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT column_name, data_type, character_maximum_length, column_default, is_nullable
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE table_name = '{table_name}' AND table_schema = '{pg_schema}';
+        """)
+        result = await asyncio.to_thread(cur.fetchall)
+        # Format the schema information into CREATE TABLE statement format
+        if not result:
+            return f"No schema found for table {table_name}"
+        
+        create_statement = f"CREATE TABLE {table_name} (\n"
+        column_definitions = []
+        
+        for row in result:
+            column_name = row[0]
+            data_type = row[1]
+            max_length = row[2]
+            default_value = row[3]
+            is_nullable = row[4]
+            
+            # Build column definition
+            column_def = f"    {column_name} {data_type}"
+            
+            # Add length constraint if applicable
+            if max_length and data_type in ['character varying', 'varchar', 'char']:
+                column_def += f"({max_length})"
+            
+            # Add NOT NULL constraint if applicable
+            if is_nullable == 'NO':
+                column_def += " NOT NULL"
+            
+            # Add default value if applicable
+            if default_value:
+                column_def += f" DEFAULT {default_value}"
+            
+            column_definitions.append(column_def)
+        
+        create_statement += ",\n".join(column_definitions)
+        create_statement += "\n);"
+        
+        print("create_statement: ", create_statement)
+        return create_statement
 
-        return await asyncio.to_thread(blocking_get_schema)
     except Exception as e:
         return f"Error fetching schema for {table_name}: {str(e)}"
 
@@ -102,27 +157,25 @@ async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
             - 'error': Error message (if failed)
     """
     try:
-        seller_id = get_seller_id(config)
-        conn = await get_db_connection(seller_id)
+        # seller_id = get_seller_id(config)
+        # conn = await get_db_connection(seller_id)
+        query = f"SET search_path TO {pg_schema};\n" + query
+        cur = conn.cursor()
+        try:
+            cur.execute(query)
+            result = await asyncio.to_thread(cur.fetchall)
+            csv = pd.DataFrame(result).to_csv(index=False)
+            return {
+                "success": True,
+                "query": query,
+                "data": csv,
+            }
+        except Exception as e:
+            conn.rollback()
+            raise e
 
-        def blocking_db_query():
-            cur = conn.cursor()
-            try:
-                cur.execute(query)
-                results = cur.fetchall()
-                df = pd.DataFrame(results)
-                return {
-                    "success": True,
-                    "data": df,
-                    "message": "Query executed successfully",
-                }
-            except Exception as e:
-                conn.rollback()
-                raise e
-
-        return await asyncio.to_thread(blocking_db_query)
     except Exception as e:
-        return {"success": False, "error": str(e), "message": "Query execution failed"}
+        return {"success": False, "error": str(e)}
 
 
 async def db_write_tool(query: str, config: RunnableConfig) -> dict[str, Any]:

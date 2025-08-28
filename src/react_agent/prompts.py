@@ -18,12 +18,17 @@ Current time: {system_time}
   Aggregate only if the exact-grain table does not exist.
 - Prefer CHILD ASIN tables by default; PARENT ASIN is an aggregation and should be used only if explicitly requested.
 - For questions about all products (no ASIN/SKU/name filter), use business “report” tables, not *_sku_* or *_asin_* tables.
-- Use orders_report_view table to find the ASIN/SKU of a product when the user asks about a product by name.
+- Use orders_report_view to find/confirm the ASIN or SKU for a product when the user asks by product name; do not use it to compute sales totals.
 - When a product is specified by name, filter on product-name/title columns with fuzzy matching — not ASIN/SKU:
   - Tokenize the name; AND the tokens via ILIKE:
     WHERE product_name ILIKE '%token1%' AND product_name ILIKE '%token2%'
   - If unsure which column holds the name (product_name/item_name/title), call get_schema_tool() and choose the best candidate. Do not assume pg_trgm.
-- If the user asks about sales, use one of the tables containing "sales" in the name.
+- **Sales metrics policy:** Any request for “sales” numbers (e.g., revenue, ordered_product_sales, gross sales) must use the **sales_and_traffic** family of tables, not orders_report.
+  - All-products sales at a time grain → sales_and_traffic_business_report_{{daily|monthly}}
+  - Per-ASIN sales → sales_and_traffic_business_child_asin_report_{{daily|monthly}}
+  - Per-SKU sales → sales_and_traffic_business_sku_report_{{daily|monthly}}
+  - Parent-level sales only if explicitly requested → sales_and_traffic_business_parent_asin_report_{{daily|monthly}}
+  - Examples: “What were sales yesterday/last month/last year?” “What were sales for product X?” → use the appropriate sales_and_traffic_* table at the matching grain. If “product X” is given by name, first resolve ASIN/SKU via orders_report_view, then query the sales_and_traffic_* table.
 - Market basket / co-purchase questions → market_basket_analysis_report_*.
 - Repeat purchase / retention questions → repeat_purchase_report_*.
 - Fees → fee_preview_report; long-term storage fees → long_term_storage_fee_charges_report.

@@ -14,7 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
 
 from react_agent.configuration import Configuration
-from react_agent.db import conn
+from react_agent.db import conn, get_db_connection
 
 pg_schema = "sp_api_thrive_2"
 
@@ -54,17 +54,17 @@ def get_seller_id(config: RunnableConfig) -> str:
 
 
 async def list_tables_tool(config: RunnableConfig) -> List[str]:
-    """Fetch the list of available tables from the database."""
+    """Fetch the list of available views from the database."""
     try:
         # seller_id = get_seller_id(config) # TODO: uncomment this when we have a way to get the seller id
         # conn = await get_db_connection(seller_id) # TODO: uncomment this when we have a way to get the seller id
 
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(f"""
             SELECT table_name 
-            FROM information_schema.tables 
+            FROM information_schema.views 
             WHERE table_schema = '{pg_schema}' 
-            AND table_type = 'BASE TABLE'
             ORDER BY table_name;
         """)
         result = await asyncio.to_thread(cur.fetchall)
@@ -72,7 +72,7 @@ async def list_tables_tool(config: RunnableConfig) -> List[str]:
         return [table[0] for table in result]
 
     except Exception as e:
-        print(f"Error fetching tables: {str(e)}")
+        print(f"Error fetching views: {str(e)}")
         return []
     # seller_id = get_seller_id(config)
     # # conn = await get_db_connection(seller_id)
@@ -89,56 +89,53 @@ async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
 
     Returns:
         str: the schema for the table represented in the following format:
-        Column: {row[0]}, Type: {row[1]}, Max Length: {row[2]}, Default: {row[3]}, Nullable: {row[4]}
+        Column: {row[0]}, Type: {row[1]}, Comment: {row[2]}
         or an error message if the operation fails.
     """
     try:
         # seller_id = get_seller_id(config)
         # conn = await get_db_connection(seller_id)
 
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(f"""
-            SELECT column_name, data_type, character_maximum_length, column_default, is_nullable
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE table_name = '{table_name}' AND table_schema = '{pg_schema}';
+            SELECT 
+                c.column_name,
+                c.data_type,
+                col_description(pgc.oid, a.attnum) as column_comment
+            FROM information_schema.columns c
+            LEFT JOIN pg_class pgc ON pgc.relname = c.table_name
+            LEFT JOIN pg_namespace n ON n.oid = pgc.relnamespace AND n.nspname = c.table_schema
+            LEFT JOIN pg_attribute a ON a.attrelid = pgc.oid AND a.attname = c.column_name
+            WHERE c.table_name = '{table_name}' 
+            AND c.table_schema = '{pg_schema}'
+            ORDER BY c.ordinal_position;
         """)
         result = await asyncio.to_thread(cur.fetchall)
-        # Format the schema information into CREATE TABLE statement format
+        # Format the schema information
         if not result:
             return f"No schema found for table {table_name}"
         
-        create_statement = f"CREATE TABLE {table_name} (\n"
-        column_definitions = []
+        schema_lines = []
         
         for row in result:
             column_name = row[0]
             data_type = row[1]
-            max_length = row[2]
-            default_value = row[3]
-            is_nullable = row[4]
+            column_comment = row[2]
             
-            # Build column definition
-            column_def = f"    {column_name} {data_type}"
+            # Build column description
+            line = f"Column: {column_name}, Type: {data_type}"
             
-            # Add length constraint if applicable
-            if max_length and data_type in ['character varying', 'varchar', 'char']:
-                column_def += f"({max_length})"
+            # Add comment if available
+            if column_comment:
+                line += f", Comment: {column_comment}"
             
-            # Add NOT NULL constraint if applicable
-            if is_nullable == 'NO':
-                column_def += " NOT NULL"
-            
-            # Add default value if applicable
-            if default_value:
-                column_def += f" DEFAULT {default_value}"
-            
-            column_definitions.append(column_def)
+            schema_lines.append(line)
         
-        create_statement += ",\n".join(column_definitions)
-        create_statement += "\n);"
+        schema_info = "\n".join(schema_lines)
         
-        print("create_statement: ", create_statement)
-        return create_statement
+        # print("schema_info: ", schema_info)
+        return schema_info
 
     except Exception as e:
         return f"Error fetching schema for {table_name}: {str(e)}"
@@ -159,12 +156,15 @@ async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
     try:
         # seller_id = get_seller_id(config)
         # conn = await get_db_connection(seller_id)
+        conn = get_db_connection()
         query = f"SET search_path TO {pg_schema};\n" + query
         cur = conn.cursor()
         try:
             cur.execute(query)
             result = await asyncio.to_thread(cur.fetchall)
-            csv = pd.DataFrame(result).to_csv(index=False)
+            # Get column names from cursor description
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            csv = pd.DataFrame(result, columns=columns).to_csv(index=False)
             return {
                 "success": True,
                 "query": query,
@@ -192,8 +192,9 @@ async def db_write_tool(query: str, config: RunnableConfig) -> dict[str, Any]:
             - 'error': Error message (if failed)
     """
     try:
-        seller_id = get_seller_id(config)
-        conn = await get_db_connection(seller_id)
+        # seller_id = get_seller_id(config)
+        # conn = await get_db_connection(seller_id)
+        conn = get_db_connection()
 
         def blocking_db_write():
             cur = conn.cursor()

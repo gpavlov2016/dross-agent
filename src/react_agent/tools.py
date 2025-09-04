@@ -16,7 +16,7 @@ from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
 from react_agent.configuration import Configuration
 from react_agent.db import conn, get_db_connection
 
-pg_schema = "sp_api_thrive_2"
+schemas = ["sp_api_thrive_2", "amazon_ads_thrive"]
 
 async def search(query: str) -> Optional[dict[str, Any]]:
     """Search for general web results.
@@ -54,22 +54,67 @@ def get_seller_id(config: RunnableConfig) -> str:
 
 
 async def list_tables_tool(config: RunnableConfig) -> List[str]:
-    """Fetch the list of available views from the database."""
+    """Fetch the list of available views from the database.
+    
+    Returns:
+        List[str]: A list of table names in the format {schema}.{table_name}.
+    """
     try:
         # seller_id = get_seller_id(config) # TODO: uncomment this when we have a way to get the seller id
         # conn = await get_db_connection(seller_id) # TODO: uncomment this when we have a way to get the seller id
 
         conn = get_db_connection()
         cur = conn.cursor()
+        schemas_str = ','.join(f"'{schema}'" for schema in schemas)
         cur.execute(f"""
-            SELECT table_name 
+            SELECT table_schema, table_name 
             FROM information_schema.views 
-            WHERE table_schema = '{pg_schema}' 
-            ORDER BY table_name;
+            WHERE table_schema IN ({schemas_str}) 
+            ORDER BY table_schema, table_name;
         """)
         result = await asyncio.to_thread(cur.fetchall)
-        # result contains tuples of (table_name, )
-        return [table[0] for table in result]
+        # result contains tuples of (table_schema, table_name)
+
+        included_tables = [
+            "ad_group_level_report_view",
+            "advertised_product_report_view",
+            "campaign_level_report_view",
+            "campaign_serving_status_detail_view",
+            "profile_view",
+            "product_ad_report_view",
+            "purchased_product_keyword_report_view",
+            "sb_ad_group_report_view",
+            "sb_ad_report_view",
+            "sb_campaign_report_view",
+            "sb_keyword_report_view",
+            "sb_purchased_product_view",
+            "sb_search_term_report_view",
+            "sb_target_report_view",
+            "sd_ad_group_report_view",
+            "sd_campaign_report_view",
+            "sd_matched_target_report_view",
+            "sd_product_ad_report_view",
+            "sd_target_report_view",
+            "search_term_ad_keyword_report_view",
+            "search_term_targeting_report_view",
+            "targeting_keyword_report_view",
+            "targeting_report_view"
+        ]
+        # Filter to include:
+        # 1. All tables from schemas other than amazon_ads_thrive
+        # 2. Only specific tables from amazon_ads_thrive schema that are in our included list
+        filtered_result = []
+        for table in result:
+            schema, table_name = table
+            if schema == "amazon_ads_thrive":
+                # Only include tables from amazon_ads_thrive if they're in our included list
+                if table_name in included_tables:
+                    filtered_result.append(table)
+            else:
+                # Include all tables from other schemas
+                filtered_result.append(table)
+        
+        return [f"{table[0]}.{table[1]}" for table in filtered_result]
 
     except Exception as e:
         print(f"Error fetching views: {str(e)}")
@@ -80,15 +125,14 @@ async def list_tables_tool(config: RunnableConfig) -> List[str]:
     #     f"orders_view_{seller_id}",
     # ]
 
-
-async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
-    """Fetch the schema for a specific table in Postgres.
+async def get_schema_tool(full_table_name: str, config: RunnableConfig) -> str:
+    """Fetch column information for a specific table in Postgres.
 
     Args:
-        table_name (str): The name of the table to get the schema for.
+        full_table_name (str): The name of the table to get the schema for in the format {schema}.{table_name}.
 
     Returns:
-        str: the schema for the table represented in the following format:
+        str: the column information for the table represented in the following format:
         Column: {row[0]}, Type: {row[1]}, Comment: {row[2]}
         or an error message if the operation fails.
     """
@@ -96,6 +140,8 @@ async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
         # seller_id = get_seller_id(config)
         # conn = await get_db_connection(seller_id)
 
+        table_schema, table_name = full_table_name.split(".")
+        
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(f"""
@@ -108,13 +154,13 @@ async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
             LEFT JOIN pg_namespace n ON n.oid = pgc.relnamespace AND n.nspname = c.table_schema
             LEFT JOIN pg_attribute a ON a.attrelid = pgc.oid AND a.attname = c.column_name
             WHERE c.table_name = '{table_name}' 
-            AND c.table_schema = '{pg_schema}'
+            AND c.table_schema = '{table_schema}'
             ORDER BY c.ordinal_position;
         """)
         result = await asyncio.to_thread(cur.fetchall)
         # Format the schema information
-        if not result:
-            return f"No schema found for table {table_name}"
+        if not result or len(result) == 0:
+            return f"No schema found for table {full_table_name}"
         
         schema_lines = []
         
@@ -138,7 +184,7 @@ async def get_schema_tool(table_name: str, config: RunnableConfig) -> str:
         return schema_info
 
     except Exception as e:
-        return f"Error fetching schema for {table_name}: {str(e)}"
+        return f"Error fetching schema for {full_table_name}: {str(e)}"
 
 
 async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
@@ -157,7 +203,6 @@ async def db_query_tool(query: str, config: RunnableConfig) -> Dict[str, Any]:
         # seller_id = get_seller_id(config)
         # conn = await get_db_connection(seller_id)
         conn = get_db_connection()
-        query = f"SET search_path TO {pg_schema};\n" + query
         cur = conn.cursor()
         try:
             cur.execute(query)
